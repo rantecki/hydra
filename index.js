@@ -248,6 +248,13 @@ class Hydra extends EventEmitter {
         }).catch((err) => this._logMessage('error', err.toString()));
       };
       this.config = config;
+
+      // Allow override of default safeJSONStringify / safeJSONParse methods
+      // for channel data.  Internal Hydra serialisation (e.g. config) still
+      // uses the default methods.
+      this.safeJSONStringify = config.safeJSONStringify || Utils.safeJSONStringify;
+      this.safeJSONParse = config.safeJSONParse || Utils.safeJSONParse;
+
       this._connectToRedis(this.config).then(() => {
         if (!this.redisdb) {
           reject(new Error('No Redis connection'));
@@ -533,7 +540,7 @@ class Hydra extends EventEmitter {
           this.mcMessageChannelClient = this.testMode ? testRedis.createClient() : this.redisdb.duplicate();
           this.mcMessageChannelClient.subscribe(`${mcMessageKey}:${serviceName}`);
           this.mcMessageChannelClient.on('message', (channel, message) => {
-            let msg = Utils.safeJSONParse(message);
+            let msg = this.safeJSONParse(message);
             if (msg) {
               let umfMsg = UMFMessage.createMessage(msg);
               this.emit('message', umfMsg.toShort());
@@ -543,7 +550,7 @@ class Hydra extends EventEmitter {
           this.mcDirectMessageChannelClient = this.testMode ? testRedis.createClient() : this.redisdb.duplicate();
           this.mcDirectMessageChannelClient.subscribe(`${mcMessageKey}:${serviceName}:${this.instanceID}`);
           this.mcDirectMessageChannelClient.on('message', (channel, message) => {
-            let msg = Utils.safeJSONParse(message);
+            let msg = this.safeJSONParse(message);
             if (msg) {
               let umfMsg = UMFMessage.createMessage(msg);
               this.emit('message', umfMsg.toShort());
@@ -1277,11 +1284,11 @@ class Hydra extends EventEmitter {
             if (umfmsg.timeout) {
               options.timeout = umfmsg.timeout;
             }
-            options.body = Utils.safeJSONStringify(umfmsg.body);
+            options.body = this.safeJSONStringify(umfmsg.body);
             serverRequest.send(Object.assign(options, sendOpts))
               .then((res) => {
                 if (res.payLoad && res.headers['content-type'] && res.headers['content-type'].indexOf('json') > -1) {
-                  res = Object.assign(res, Utils.safeJSONParse(res.payLoad.toString('utf8')));
+                  res = Object.assign(res, this.safeJSONParse(res.payLoad.toString('utf8')));
                   delete res.payLoad;
                 }
                 resolve(serverResponse.createResponseObject(res.statusCode, res));
@@ -1372,7 +1379,7 @@ class Hydra extends EventEmitter {
     }
     if (messageChannel) {
       let msg = UMFMessage.createMessage(message);
-      let strMessage = Utils.safeJSONStringify(msg.toShort());
+      let strMessage = this.safeJSONStringify(msg.toShort());
       messageChannel.publish(channel, strMessage);
     }
   }
@@ -1533,7 +1540,7 @@ class Hydra extends EventEmitter {
         if (err) {
           reject(err);
         } else {
-          let msg = Utils.safeJSONParse(data);
+          let msg = this.safeJSONParse(data);
           resolve(msg);
         }
       });
@@ -1551,7 +1558,7 @@ class Hydra extends EventEmitter {
   _markQueueMessage(message, completed, reason) {
     let serviceName = this._getServiceName();
     return new Promise((resolve, reject) => {
-      let strMessage = Utils.safeJSONStringify(message);
+      let strMessage = this.safeJSONStringify(message);
       this.redisdb.lrem(`${redisPreKey}:${serviceName}:mqinprogress`, -1, strMessage, (err, _data) => {
         if (err) {
           reject(err);
@@ -1564,7 +1571,7 @@ class Hydra extends EventEmitter {
           if (completed) {
             resolve(message);
           } else {
-            strMessage = Utils.safeJSONStringify(message);
+            strMessage = this.safeJSONStringify(message);
             this.redisdb.rpush(`${redisPreKey}:${serviceName}:mqincomplete`, strMessage, (err, data) => {
               if (err) {
                 reject(err);
@@ -1715,7 +1722,10 @@ class Hydra extends EventEmitter {
   * @return {object} helper - utils helper
   */
   _getUtilsHelper() {
-    return require('./lib/utils');
+    const utils = require('./lib/utils');
+    utils.safeJSONStringify = this.safeJSONStringify;
+    utils.safeJSONParse = this.safeJSONParse;
+    return utils;
   }
 
   /**
