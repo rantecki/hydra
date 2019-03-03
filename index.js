@@ -570,28 +570,20 @@ class Hydra extends EventEmitter {
             let msg = this.safeJSONParse(message);
             if (msg) {
               let umfMsg = UMFMessage.createMessage(msg);
-              console.log('got global message:', umfMsg);
               // Ignore messages from myself.
               if (umfMsg.from === `${this.instanceID}:${this.serviceName}:/`) return;
               // Handle general service-info messages.
               if (umfMsg.type === 'service-info' && umfMsg.body.action === 'remove-instance') {
-                console.log('got a service instance remove msg for instance ', umfMsg.body.instanceID);
                 // Remove the instance ID from internal service cache.
                 const cacheKey = `checkServicePresence:${umfMsg.body.serviceName}`;
                 let cachedValue = this.internalCache.get(cacheKey);
-                if (!cachedValue) {
-                  console.log('service name not cached.');
-                  return;
-                }
-                console.log('cachedValue=', cachedValue);
+                if (!cachedValue) return;
                 cachedValue = cachedValue.filter(x => x.instanceID !== umfMsg.body.instanceID);
                 if (!cachedValue.length) {
-                  console.log('No instances left.');
                   // If no instances left, remove from cache (by setting TTL to 0).
                   this.internalCache.put(cacheKey, cachedValue, 0);
                 } else {
                   // Update cached value.
-                  console.log('Updating cached instances: ', cachedValue);
                   this.internalCache.put(cacheKey, cachedValue, KEY_EXPIRATION_TTL);
                 }
               }
@@ -1550,7 +1542,7 @@ class Hydra extends EventEmitter {
       // NOTE: 'to' field in message is ignored.
       let msg = UMFMessage.createMessage(message);
       let strMessage = this.safeJSONStringify(msg.toShort());
-      this.redisdb.publish('global', strMessage);
+      this.redisdb.publish(`${mcMessageKey}:global`, strMessage);
       resolve();
     });
   }
