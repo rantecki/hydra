@@ -53,6 +53,7 @@ class Hydra extends EventEmitter {
     this.instanceID = INSTANCE_ID_NOT_SET;
     this.mcMessageChannelClient;
     this.mcDirectMessageChannelClient;
+    this.mcGlobalMessageChannelClient;
     this.messageChannelPool = {};
     this.config = null;
     this.serviceName = '';
@@ -378,6 +379,9 @@ class Hydra extends EventEmitter {
         if (this.mcDirectMessageChannelClient) {
           promises.push(this.mcDirectMessageChannelClient.quitAsync());
         }
+        if (this.mcGlobalMessageChannelClient) {
+          promises.push(this.mcGlobalMessageChannelClient.quitAsync());
+        }
       }
       Object.keys(this.messageChannelPool).forEach((keyname) => {
         promises.push(this.messageChannelPool[keyname].quitAsync());
@@ -557,6 +561,40 @@ class Hydra extends EventEmitter {
             if (msg) {
               let umfMsg = UMFMessage.createMessage(msg);
               this.emit('message', umfMsg.toShort());
+            }
+          });
+
+          this.mcGlobalMessageChannelClient = this.testMode ? testRedis.createClient() : this.redisdb.duplicate();
+          this.mcGlobalMessageChannelClient.subscribe(`${mcMessageKey}:global`);
+          this.mcGlobalMessageChannelClient.on('message', (channel, message) => {
+            let msg = this.safeJSONParse(message);
+            if (msg) {
+              let umfMsg = UMFMessage.createMessage(msg);
+              console.log('got global message:', umfMsg);
+              // Ignore messages from myself.
+              if (umfMsg.from === `${this.instanceID}:${this.serviceName}:/`) return;
+              // Handle general service-info messages.
+              if (umfMsg.type === 'service-info' && umfMsg.body.action === 'remove-instance') {
+                console.log('got a service instance remove msg for instance ', umfMsg.body.instanceID);
+                // Remove the instance ID from internal service cache.
+                const cacheKey = `checkServicePresence:${umfMsg.body.serviceName}`;
+                let cachedValue = this.internalCache.get(cacheKey);
+                if (!cachedValue) {
+                  console.log('service name not cached.');
+                  return;
+                }
+                console.log('cachedValue=', cachedValue);
+                cachedValue = cachedValue.filter(x => x.instanceID !== umfMsg.body.instanceID);
+                if (!cachedValue.length) {
+                  console.log('No instances left.');
+                  // If no instances left, remove from cache (by setting TTL to 0).
+                  this.internalCache.put(cacheKey, cachedValue, 0);
+                } else {
+                  // Update cached value.
+                  console.log('Updating cached instances: ', cachedValue);
+                  this.internalCache.put(cacheKey, cachedValue, KEY_EXPIRATION_TTL);
+                }
+              }
             }
           });
 
@@ -1501,6 +1539,23 @@ class Hydra extends EventEmitter {
   }
 
   /**
+   * @name sendGlobalMessage
+   * @summary Sends a message to all present instances of all hydra services.
+   * @param {object} message - UMF formatted message object
+   * @return {object} promise - resolved promise if sent or
+   *                   error in rejected promise.
+   */
+  _sendGlobalMessage(message) {
+    return new Promise((resolve, _reject) => {
+      // NOTE: 'to' field in message is ignored.
+      let msg = UMFMessage.createMessage(message);
+      let strMessage = this.safeJSONStringify(msg.toShort());
+      this.redisdb.publish(channel, strMessage);
+      resolve();
+    });
+  }
+
+  /**
    * @name _queueMessage
    * @summary Queue a message
    * @param {object} message - UMF message to queue
@@ -2137,6 +2192,17 @@ class IHydra extends Hydra {
    */
   sendBroadcastMessage(message) {
     return super._sendBroadcastMessage(message);
+  }
+
+  /**
+   * @name sendGlobalMessage
+   * @summary Sends a message to all present instances of all hydra services.
+   * @param {string | object} message - Plain string or UMF formatted message object
+   * @return {object} promise - resolved promise if sent or
+   *                   error in rejected promise.
+   */
+  sendGlobalMessage(message) {
+    return super._sendGlobalMessage(message);
   }
 
   /**
